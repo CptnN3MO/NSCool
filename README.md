@@ -63,4 +63,12 @@ Install the typical stack:
 From an XSPEC prompt:
 
 ```tcl
-@grid_xspec.xcm
+@grid_xspec.xcm ```
+
+### 2) Run the Python file
+
+python MCMC.py \
+  --indir grid_logs \
+  --run-mcmc \
+  --teff-obs-ev 121 \
+  --sigma-ev 2
