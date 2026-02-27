@@ -577,6 +577,132 @@ def plot_3d_interactive(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV
 
     fig.write_html(outpath, include_plotlyjs="cdn")
 
+
+def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_transition: int = 20, title: str = "3D evolution") -> None:
+    """Create a Plotly HTML animation that smoothly interpolates between multiple z-columns.
+
+    zcols: ordered list of column names (e.g., ['kT_g1_eV', ..., 'kT_g5_eV'])
+    steps_per_transition: number of intermediate frames between consecutive spectra
+    """
+    if go is None:
+        raise ImportError("plotly is required for interactive animation. Install with `pip install plotly`.")
+
+    # prepare grids (assume same M,R grid for all)
+    Mvals = np.sort(df["M"].unique())
+    Rvals = np.sort(df["R"].unique())
+
+    # Build Z array for each spectrum: shape (n_spec, len(M), len(R))
+    Zs = []
+    for zcol in zcols:
+        Z = np.empty((len(Mvals), len(Rvals)), dtype=float)
+        for i, m in enumerate(Mvals):
+            for j, r in enumerate(Rvals):
+                Z[i, j] = float(df[(df["M"] == m) & (df["R"] == r)][zcol].iloc[0])
+        Zs.append(Z)
+
+    # Create sequence of frames by linear interpolation between consecutive Zs
+    frames = []
+    spec_times = []
+    for s in range(len(Zs) - 1):
+        Z0 = Zs[s]
+        Z1 = Zs[s + 1]
+        for t in range(steps_per_transition):
+            alpha = t / float(steps_per_transition)
+            Zt = (1 - alpha) * Z0 + alpha * Z1
+            frames.append(Zt)
+            spec_times.append(s + alpha)
+    # append final spectrum frame
+    frames.append(Zs[-1])
+    spec_times.append(len(Zs) - 1)
+
+    # Build initial traces (use first frame)
+    initZ = frames[0]
+    traces = []
+    trace_meta = []
+    style_map = {
+        5.6: {"color": "blue", "dash": "dot"},
+        7.3: {"color": "green", "dash": "dash"},
+        8.8: {"color": "black", "dash": "solid"},
+    }
+
+    for D in sorted(df["D"].unique()):
+        sub = df[df["D"] == D].copy()
+        Mvals_local = np.sort(sub["M"].unique())
+        Rvals_local = np.sort(sub["R"].unique())
+
+        sty = None
+        for k, v in style_map.items():
+            if abs(float(D) - float(k)) < 1e-6:
+                sty = v
+                break
+        if sty is None:
+            sty = {"color": "steelblue", "dash": "solid"}
+
+        # lines along R for each M
+        for i in range(len(Mvals_local)):
+            xs = np.full(len(Rvals_local), Mvals_local[i])
+            ys = Rvals_local
+            zs = initZ[i, :]
+            traces.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+                                       line=dict(color=sty["color"], width=4, dash=sty["dash"]),
+                                       name=f"D={D}", showlegend=(i == 0)))
+            trace_meta.append((D, "MR", i))
+
+        # lines along M for each R
+        for j in range(len(Rvals_local)):
+            xs = Mvals_local
+            ys = np.full(len(Mvals_local), Rvals_local[j])
+            zs = initZ[:, j]
+            traces.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+                                       line=dict(color=sty["color"], width=4, dash=sty["dash"]),
+                                       name=f"D={D}", showlegend=False))
+            trace_meta.append((D, "RM", j))
+
+    # Build plot and frames data: each frame must supply updated 'z' for each trace
+    fig = go.Figure(data=traces)
+    plot_frames = []
+    for idx, Zt in enumerate(frames):
+        data = []
+        k = 0
+        for D in sorted(df["D"].unique()):
+            sub = df[df["D"] == D].copy()
+            Mvals_local = np.sort(sub["M"].unique())
+            Rvals_local = np.sort(sub["R"].unique())
+
+            for i in range(len(Mvals_local)):
+                zs = Zt[i, :]
+                data.append(dict(z=zs))
+                k += 1
+
+            for j in range(len(Rvals_local)):
+                zs = Zt[:, j]
+                data.append(dict(z=zs))
+                k += 1
+
+        plot_frames.append(go.Frame(data=data, name=str(idx), layout=dict(title=f"{title} (t={spec_times[idx]:.2f})")))
+
+    fig.frames = plot_frames
+    fig.update_layout(
+        updatemenus=[dict(type="buttons",
+                          showactive=False,
+                          y=1,
+                          x=1.1,
+                          xanchor="right",
+                          yanchor="top",
+                          pad=dict(t=0, r=10),
+                          buttons=[dict(label="Play",
+                                        method="animate",
+                                        args=[None, {"frame": {"duration": 100, "redraw": True}, "fromcurrent": True}]),
+                                   dict(label="Pause",
+                                        method="animate",
+                                        args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])])],
+        scene=dict(xaxis_title="Mass (Msun)", yaxis_title="Radius (km)", zaxis_title=zcols[0]),
+        title=title,
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+
+    fig.write_html(outpath, include_plotlyjs="cdn")
+
 # ---------- main ----------
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -598,6 +724,8 @@ def main() -> None:
         help="Posterior sampler: exact grid sampling (recommended) or discrete MH.",
     )
     ap.add_argument("--interactive", action="store_true", help="Write an interactive Plotly HTML 3D plot to out/3d/")
+    ap.add_argument("--animate", action="store_true", help="Write an animated Plotly HTML showing time evolution between spectra")
+    ap.add_argument("--anim-steps", type=int, default=20, help="Interpolation steps per transition for animation")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
