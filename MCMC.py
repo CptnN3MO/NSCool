@@ -739,6 +739,82 @@ def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_tr
 
     fig.write_html(outpath, include_plotlyjs="cdn")
 
+
+def analyze_cooling_rates(df: pd.DataFrame, outdir: Path) -> None:
+    """Compute linear cooling rate across the five spectra for each (M,R,D).
+
+    - Fits slope vs spectrum index (1..5) for columns kT_g1_eV..kT_g5_eV
+    - Saves `outdir/data/cooling_rates.csv` with slopes per (M,R,D)
+    - Produces boxplot per distance saved to `outdir/3d/cooling_rates_boxplot.png`
+    - Runs basic statistical tests (ANOVA + pairwise t-tests) if scipy is available
+    """
+    required = [f"kT_g{g}_eV" for g in [1, 2, 3, 4, 5]]
+    for c in required:
+        if c not in df.columns:
+            raise SystemExit(f"Missing required column {c} for cooling analysis")
+
+    x = np.array([1, 2, 3, 4, 5], dtype=float)
+    rows = []
+    for _, r in df.iterrows():
+        y = np.array([r[f"kT_g{g}_eV"] for g in [1, 2, 3, 4, 5]], dtype=float)
+        # linear fit slope per spectrum index
+        slope, intercept = np.polyfit(x, y, 1)
+        rows.append({"M": r["M"], "R": r["R"], "D": r["D"], "slope_eV_per_spec": float(slope), "intercept": float(intercept)})
+
+    outdf = pd.DataFrame(rows).sort_values(["D", "M", "R"]).reset_index(drop=True)
+    outcsv = outdir / "data" / "cooling_rates.csv"
+    outdf.to_csv(outcsv, index=False)
+
+    # boxplot of slopes per distance
+    fig, ax = plt.subplots(figsize=(6, 4))
+    groups = []
+    labels = []
+    for D in sorted(outdf["D"].unique()):
+        vals = outdf[outdf["D"] == D]["slope_eV_per_spec"].to_numpy()
+        groups.append(vals)
+        labels.append(str(D))
+
+    ax.boxplot(groups, labels=labels, showmeans=True)
+    ax.set_xlabel("Distance (kpc)")
+    ax.set_ylabel("Cooling rate (eV per spectrum index)")
+    ax.set_title("Cooling-rate distribution by distance")
+    fig.tight_layout()
+    outpng = outdir / "3d" / "cooling_rates_boxplot.png"
+    fig.savefig(outpng, dpi=200)
+    plt.close(fig)
+
+    print(f"[OK] Wrote {outcsv} and {outpng}")
+
+    # Statistical tests if scipy available
+    try:
+        import scipy.stats as stats
+    except Exception:
+        print("[WARN] scipy not available; skipping formal statistical tests. Slopes saved to CSV for offline analysis.")
+        return
+
+    # ANOVA across distances
+    samples = [outdf[outdf["D"] == D]["slope_eV_per_spec"].to_numpy() for D in sorted(outdf["D"].unique())]
+    try:
+        fval, pval = stats.f_oneway(*samples)
+        print(f"ANOVA F={fval:.4g}, p={pval:.4g}")
+    except Exception:
+        print("[WARN] ANOVA failed; possibly unequal sizes or constant groups")
+
+    # Pairwise t-tests with Bonferroni
+    Ds = sorted(outdf["D"].unique())
+    ncomb = 0
+    for i in range(len(Ds)):
+        for j in range(i + 1, len(Ds)):
+            a = outdf[outdf["D"] == Ds[i]]["slope_eV_per_spec"].to_numpy()
+            b = outdf[outdf["D"] == Ds[j]]["slope_eV_per_spec"].to_numpy()
+            try:
+                t, p = stats.ttest_ind(a, b, equal_var=False)
+            except Exception:
+                t, p = (np.nan, np.nan)
+            ncomb += 1
+            print(f"t-test D={Ds[i]} vs D={Ds[j]}: t={t:.4g}, p={p:.4g}")
+
+
 # ---------- main ----------
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -762,6 +838,7 @@ def main() -> None:
     ap.add_argument("--interactive", action="store_true", help="Write an interactive Plotly HTML 3D plot to out/3d/")
     ap.add_argument("--animate", action="store_true", help="Write an animated Plotly HTML showing time evolution between spectra")
     ap.add_argument("--anim-steps", type=int, default=20, help="Interpolation steps per transition for animation")
+    ap.add_argument("--analyze-cooling", action="store_true", help="Perform statistical analysis of cooling rates across distances")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
