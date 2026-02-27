@@ -56,19 +56,26 @@ Install the typical stack:
 
 ---
 
+
+---
+
 ## Usage
 
-### 1) Run the XSPEC grid
+### 1) Run XSPEC (baseline fit)
 
 From an XSPEC prompt:
 
 ```tcl
-@grid_xspec.xcm ```
+@base_xspec.xcm
+@xspec.tcl
+```
+### 2) Run the Py script
 
-### 2) Run the Python file
-
+```python
 python MCMC.py \
   --indir grid_logs \
   --run-mcmc \
   --teff-obs-ev 121 \
   --sigma-ev 2
+```
+
