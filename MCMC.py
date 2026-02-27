@@ -943,6 +943,13 @@ def main() -> None:
         except ImportError as e:
             print(f"[WARN] Could not create animation: {e}")
 
+    # Optional cooling-rate analysis
+    if args.analyze_cooling:
+        try:
+            analyze_cooling_rates(df, outdir)
+        except Exception as e:
+            print(f"[ERROR] Cooling analysis failed: {e}")
+
     # Optional MCMC: infer (M,R,D) given a measured kT (eV) with uncertainty
     if args.run_mcmc:
         if args.teff_obs_ev is None or args.sigma_ev is None:
